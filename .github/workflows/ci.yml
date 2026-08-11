@@ -1,0 +1,122 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  host-tests:
+    name: Host unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run tests
+        run: |
+          cd test
+          make
+      # These run on x86 with a fake register bank, so no board is needed.
+      # This is the job that actually gates a merge.
+
+  firmware:
+    name: Cross-compile firmware
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ARM toolchain
+        uses: carlosperate/arm-none-eabi-gcc-action@v1
+        with:
+          release: '13.2.Rel1'
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE=cmake/arm-none-eabi.cmake
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Size report
+        run: |
+          arm-none-eabi-size build/stm32f103_baremetal.elf | tee size.txt
+          # Fail the build if flash grows past 50% of the 128 KB device.
+          # A hard number here means bloat is caught at the commit that
+          # causes it, not months later when it stops fitting.
+          TEXT=$(arm-none-eabi-size build/stm32f103_baremetal.elf | awk 'NR==2{print $1}')
+          echo "flash bytes: $TEXT"
+          if [ "$TEXT" -gt 65536 ]; then
+            echo "::error::flash usage $TEXT exceeds 64 KB budget"
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware
+          path: |
+            build/*.elf
+            build/*.bin
+            build/*.hex
+            size.txt
+
+  static-analysis:
+    name: cppcheck + MISRA
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cppcheck
+        run: sudo apt-get update && sudo apt-get install -y cppcheck
+
+      - name: cppcheck
+        run: |
+          cppcheck --enable=warning,style,performance,portability \
+                   --std=c11 --platform=unix32 \
+                   --suppress=missingIncludeSystem \
+                   --inline-suppr \
+                   --error-exitcode=1 \
+                   -Iinclude src/
+
+      - name: MISRA C:2012 (advisory)
+        continue-on-error: true
+        run: |
+          # HONEST NOTE: cppcheck's MISRA addon covers only a SUBSET of the
+          # 143 MISRA C:2012 rules. Many rules are undecidable statically or
+          # simply unimplemented here. This job reports findings for review -
+          # it does NOT constitute MISRA compliance and this project does not
+          # claim compliance. Deviations are documented in docs/MISRA.md.
+          cppcheck --addon=misra --std=c11 -Iinclude src/ 2>&1 | tee misra.txt || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: analysis
+          path: misra.txt
+
+  format:
+    name: C source hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check C/H whitespace
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          problems = []
+          for directory in ("src", "include", "test"):
+              root = Path(directory)
+              if not root.exists():
+                  continue
+              for path in root.rglob("*"):
+                  if path.suffix not in {".c", ".h"}:
+                      continue
+                  for line_no, line in enumerate(path.read_text(errors="replace").splitlines(), 1):
+                      if line.rstrip(" \t") != line:
+                          problems.append(f"{path}:{line_no}: trailing whitespace")
+                      if "\t" in line:
+                          problems.append(f"{path}:{line_no}: tab in C/H source")
+
+          if problems:
+              print("\n".join(problems))
+              raise SystemExit(1)
+          print("C/H source hygiene OK")
+          PY

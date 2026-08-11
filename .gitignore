@@ -1,0 +1,16 @@
+build/
+*.o
+*.obj
+*.elf
+*.bin
+*.hex
+*.map
+*.d
+test/runner
+__pycache__/
+*.pyc
+.venv/
+tmp/
+sstate-cache/
+downloads/
+output/
