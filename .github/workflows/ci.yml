@@ -73,6 +73,7 @@ jobs:
                    --std=c11 --platform=unix32 \
                    --suppress=missingIncludeSystem \
                    --inline-suppr \
+                    --suppressions-list=.cppcheck-suppressions \
                    --error-exitcode=1 \
                    -Iinclude src/
 
