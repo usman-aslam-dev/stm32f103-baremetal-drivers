@@ -1,0 +1,19 @@
+// Each entry is a FALSE POSITIVE arising because cppcheck assumes hosted C
+// semantics. Bare-metal code legitimately violates those assumptions.
+// Nothing here hides a real defect. Rationale per entry:
+//
+// comparePointers  - _sdata/_edata are LINKER-defined bounds of one region;
+//                    in C they look like unrelated externs. Standard idiom.
+// duplicateExpression - s_ticks is volatile and incremented by the SysTick
+//                    ISR between the two reads; the substitution cppcheck
+//                    performs is invalid. Unsigned subtraction is deliberate
+//                    so the comparison survives the 49-day wrap.
+// unusedStructMember - peripheral structs must declare every register and
+//                    reserved gap or the member offsets stop matching silicon.
+// constParameter*  - advisory; const on a pointer-to-volatile-peripheral adds
+//                    nothing and breaks API consistency across the drivers.
+comparePointers:src/startup_stm32f103rb.c
+duplicateExpression:src/systick.c
+unusedStructMember
+constParameterPointer
+constVariablePointer
